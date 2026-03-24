@@ -197,14 +197,59 @@ async function lfmTopAlbums(artist, limit = 10) {
   return result;
 }
 
-async function lfmArtistSearch(q) {
-  const url = `${LASTFM_BASE}/?method=artist.search&artist=${enc(q)}&api_key=${LASTFM_KEY}&format=json&limit=3`;
-  const d = await apiFetch(url, 6000);
-  const artists = d?.results?.artistmatches?.artist || [];
-  if (!artists.length) return null;
+// Resolve a free-text query (artist / album / track) to { artist, tags[], year }
+// Runs all three Last.fm searches in parallel and picks the richest match.
+async function resolveSearchQuery(q) {
   const norm = normalise(q);
-  const exact = artists.find(a => normalise(a.name) === norm);
-  return (exact || artists[0])?.name || null;
+
+  const [trackData, albumData, artistData] = await Promise.all([
+    apiFetch(`${LASTFM_BASE}/?method=track.search&track=${enc(q)}&api_key=${LASTFM_KEY}&format=json&limit=3`, 6000).catch(() => null),
+    apiFetch(`${LASTFM_BASE}/?method=album.search&album=${enc(q)}&api_key=${LASTFM_KEY}&format=json&limit=3`, 6000).catch(() => null),
+    apiFetch(`${LASTFM_BASE}/?method=artist.search&artist=${enc(q)}&api_key=${LASTFM_KEY}&format=json&limit=3`, 6000).catch(() => null),
+  ]);
+
+  const tracks  = trackData?.results?.trackmatches?.track  || [];
+  const albums  = albumData?.results?.albummatches?.album  || [];
+  const artists = artistData?.results?.artistmatches?.artist || [];
+
+  // Priority: exact artist name match > track hit > album hit > first artist
+  const exactArtist = artists.find(a => normalise(a.name) === norm);
+
+  let artist = null, seedTags = [], seedYear = null;
+
+  if (exactArtist) {
+    artist = exactArtist.name;
+  } else if (tracks.length) {
+    artist = tracks[0].artist;
+    // Fetch track info for its tags and release year
+    const ti = await apiFetch(
+      `${LASTFM_BASE}/?method=track.getInfo&artist=${enc(artist)}&track=${enc(tracks[0].name)}&api_key=${LASTFM_KEY}&format=json`,
+      6000
+    ).catch(() => null);
+    seedTags = (ti?.track?.toptags?.tag || ti?.track?.tags?.tag || []).map(t => normalise(t.name));
+    seedYear = ti?.track?.album?.releasedate?.trim().slice(0, 4) || null;
+  } else if (albums.length) {
+    artist = albums[0].artist;
+    const ai = await lfmAlbumInfo(artist, albums[0].name);
+    seedTags = (ai?.tags?.tag || []).map(t => normalise(t.name));
+    seedYear = ai?.releasedate?.trim().slice(0, 4) || null;
+  } else if (artists.length) {
+    artist = artists[0].name;
+  }
+
+  if (!artist) return null;
+
+  // Fill tags from artist if the track/album didn't provide them
+  if (seedTags.length < 2) {
+    const atags = await lfmArtistTags(artist);
+    seedTags = [...new Set([...seedTags, ...atags])];
+  }
+
+  return {
+    artist,
+    tags: seedTags.slice(0, 10),
+    year: seedYear ? parseInt(seedYear, 10) : null,
+  };
 }
 
 async function lfmAlbumInfo(artist, album) {
@@ -565,7 +610,14 @@ async function recommend(seedOverride = null) {
 }
 
 // ─── ENGINE ─────────────────────────────────────────────────────────
-async function runEngine(seedOverride = null) {
+async function runEngine(seedContext = null) {
+  // seedContext: null | string (artist name) | { artist, tags[], year }
+  const seedArtist = !seedContext        ? null
+                   : typeof seedContext === 'string' ? seedContext
+                   : seedContext.artist  || null;
+  const seedTags   = Array.isArray(seedContext?.tags) ? seedContext.tags : [];
+  const seedYear   = seedContext?.year   ? parseInt(seedContext.year, 10)  : null;
+
   const rarity = RARITY[S.rarityLevel];
 
   // ── PHASE 1: EXPAND — collect candidate (artist, album, sim) tuples ──
@@ -628,9 +680,9 @@ async function runEngine(seedOverride = null) {
     }
   };
 
-  if (seedOverride) {
+  if (seedArtist) {
     // Focused mode: expand from the requested artist, then backfill if still thin
-    await expandFromSeed(seedOverride);
+    await expandFromSeed(seedArtist);
     for (let i = 0; i < MAX_SEEDS && candidates.length < TARGET; i++) {
       await expandFromSeed(pickSeedArtist());
     }
@@ -673,6 +725,17 @@ async function runEngine(seedOverride = null) {
     if (S.rarityLevel === 1 && listeners > 500000) return;
     if (S.rarityLevel >= 2 && listeners > 0 && listeners > rarity.maxListeners) return;
     if (S.rarityLevel >= 2 && dg && have > rarity.maxHave) return;
+
+    // Seed-context filters — only active when user searched for something specific
+    if (seedYear) {
+      const yr = parseInt(year, 10);
+      // Skip candidates more than 18 years away from the seed's era
+      if (yr && Math.abs(yr - seedYear) > 18) return;
+    }
+    if (seedTags.length >= 3) {
+      // Require at least one shared tag with the seed; avoids genre/era mismatch
+      if (!allTags.some(t => seedTags.includes(t))) return;
+    }
 
     // Fallback score used if Groq fails
     const fallbackScore = computeMatchScoreFallback(c.sim, allTags);
@@ -922,21 +985,21 @@ async function onCustomSearch() {
   const q = ($searchInput?.value || '').trim();
   if (!q) return;
 
-  // Temporarily disable buttons and show loading while we resolve the artist
   $btn.disabled = true;
   if ($searchBtn) $searchBtn.disabled = true;
-  setLoading(`Finding "${q}"…`);
+  setLoading(`Resolving "${q}"…`);
 
   try {
-    const artist = await lfmArtistSearch(q);
+    // Resolve to { artist, tags, year } — understands tracks, albums, artists
+    const ctx = await resolveSearchQuery(q);
     $btn.disabled = false;
     if ($searchBtn) $searchBtn.disabled = false;
 
-    if (!artist) {
-      setError(`No artist found for "${q}". Try a different search.`);
+    if (!ctx) {
+      setError(`Nothing found for "${q}". Try an artist name.`);
       return;
     }
-    await recommend(artist);
+    await recommend(ctx);
   } catch (e) {
     $btn.disabled = false;
     if ($searchBtn) $searchBtn.disabled = false;
