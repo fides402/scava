@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "functions": {
+    "api/score.js": {
+      "runtime": "nodejs20.x"
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/score",
+      "dest": "/api/score.js"
+    },
+    {
+      "src": "/(.*)",
+      "headers": {
+        "Cache-Control": "public, max-age=3600"
+      },
+      "dest": "/$1"
+    }
+  ]
+}

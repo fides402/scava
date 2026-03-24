@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SCAVA — Dig Deeper</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300;1,9..40,400&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ─── HEADER ─── -->
+    <header class="header">
+      <div class="logo">SCAVA</div>
+      <div class="tagline">album discovery</div>
+    </header>
+
+    <!-- ─── CONTROLS ─── -->
+    <div class="controls">
+      <div class="rarity-selector">
+        <button class="rarity-btn active" data-level="1" title="Discovery — broad recommendations, more accessible">
+          <span class="rarity-dot"></span>
+          <span class="rarity-label">Discovery</span>
+        </button>
+        <button class="rarity-btn" data-level="2" title="Rare — limited pressings, fewer listeners">
+          <span class="rarity-dot"></span>
+          <span class="rarity-label">Rare</span>
+        </button>
+        <button class="rarity-btn" data-level="3" title="Obscure — deep cuts, underground, hard to find">
+          <span class="rarity-dot"></span>
+          <span class="rarity-label">Obscure</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ─── MAIN STAGE ─── -->
+    <main class="stage">
+
+      <!-- IDLE STATE -->
+      <div class="idle-state" id="idleState">
+        <div class="idle-icon">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="24" cy="24" r="6" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="24" y1="4" x2="24" y2="14" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="24" y1="34" x2="24" y2="44" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="4" y1="24" x2="14" y2="24" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="34" y1="24" x2="44" y2="24" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </div>
+        <p class="idle-text">Hit the button to discover your next record</p>
+      </div>
+
+      <!-- LOADING STATE -->
+      <div class="loading-state hidden" id="loadingState">
+        <div class="spinner"></div>
+        <p class="loading-text" id="loadingText">Searching...</p>
+      </div>
+
+      <!-- ERROR STATE -->
+      <div class="error-state hidden" id="errorState">
+        <p class="error-text" id="errorText">Something went wrong. Try again.</p>
+      </div>
+
+      <!-- RESULT CARD -->
+      <div class="card hidden" id="resultCard">
+        <div class="card-art-wrap">
+          <img class="card-art" id="cardArt" src="" alt="" loading="lazy" />
+          <div class="card-art-overlay"></div>
+          <div class="rarity-badge" id="rarityBadge"></div>
+        </div>
+
+        <div class="card-body">
+          <div class="card-meta-top">
+            <span class="card-year" id="cardYear"></span>
+            <span class="card-label" id="cardLabel"></span>
+          </div>
+
+          <h2 class="card-album" id="cardAlbum"></h2>
+          <h3 class="card-artist" id="cardArtist"></h3>
+
+          <div class="card-tags" id="cardTags"></div>
+
+          <div class="card-stats" id="cardStats"></div>
+
+          <div class="card-why" id="cardWhy"></div>
+
+          <div class="card-links" id="cardLinks"></div>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- ─── DISCOVER BUTTON ─── -->
+    <div class="action-bar">
+      <button class="discover-btn" id="discoverBtn">
+        <span class="discover-btn-inner">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M10 2L12.09 7.26L18 8.27L14 12.14L14.18 18L10 15.77L5.82 18L6 12.14L2 8.27L7.91 7.26L10 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          </svg>
+          <span>Discover</span>
+        </span>
+      </button>
+      <div class="seen-counter" id="seenCounter"></div>
+    </div>
+
+  </div>
+
+  <script src="library.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

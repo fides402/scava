@@ -1,0 +1,9 @@
+{
+  "name": "scava",
+  "version": "1.0.0",
+  "description": "Album discovery engine — dig deeper into your taste",
+  "private": true,
+  "scripts": {
+    "dev": "npx serve ."
+  }
+}
