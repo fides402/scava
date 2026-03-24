@@ -373,19 +373,87 @@ async function deezerSearch(artist, album) {
 }
 
 // ─── MONOCHROME / TIDAL ─────────────────────────────────────────────
+// Token-overlap similarity — tolerates "(Remastered)", subtitles, etc.
+// Returns 0–1.
+function albumSim(a, b) {
+  const tokenise = s => new Set(normalise(s).split(/\s+/).filter(t => t.length > 1));
+  const ta = tokenise(a), tb = tokenise(b);
+  if (!ta.size || !tb.size) return 0;
+  let overlap = 0;
+  for (const t of ta) if (tb.has(t)) overlap++;
+  return overlap / Math.min(ta.size, tb.size);  // precision toward shorter title
+}
+
 async function findTidalAlbumId(artist, album) {
   try {
-    const q   = `${artist} ${album}`.trim();
-    const d   = await apiFetch(`${MONO_BASE}/search/?s=${enc(q)}`, 7000);
-    const items = d?.data?.items || [];
-    if (!items.length) return null;
-    const hit = items.find(i =>
-      normalise(i.artist?.name || i.artistName || '') === normalise(artist)
-    ) || items[0];
-    const trackId = hit?.id || hit?.tidalId;
-    if (!trackId) return null;
-    const info = await apiFetch(`${MONO_BASE}/info/?id=${trackId}`, 7000);
-    return info?.data?.album?.id || info?.data?.albumId || null;
+    const tArtist = normalise(artist);
+    const tAlbum  = normalise(album);
+
+    // ── Search 1: "artist album" ─────────────────────────────────────
+    const q1 = `${artist} ${album}`.trim();
+    const d1 = await apiFetch(`${MONO_BASE}/search/?s=${enc(q1)}`, 7000);
+    const items1 = d1?.data?.items || [];
+
+    // ── Search 2: just "album" (catches cases where artist is unusual) ─
+    const d2 = await apiFetch(`${MONO_BASE}/search/?s=${enc(album)}`, 7000);
+    const items2 = d2?.data?.items || [];
+
+    const all = [...items1, ...items2];
+    if (!all.length) return null;
+
+    // Deduplicate by track ID
+    const seen = new Set();
+    const items = all.filter(i => {
+      const id = i.id || i.tidalId;
+      if (!id || seen.has(id)) return false;
+      seen.add(id); return true;
+    });
+
+    // ── Pass 1: check if search results contain inline album info ────
+    // Tidal results often have item.album.{id, title} already set.
+    for (const item of items) {
+      const itemArtist = normalise(item.artist?.name || item.artistName || '');
+      if (itemArtist && itemArtist !== tArtist) continue; // skip wrong artist
+
+      const inlineTitle = item.album?.title || item.albumTitle || '';
+      const inlineId    = item.album?.id    || item.albumId;
+      if (inlineId && inlineTitle && albumSim(inlineTitle, album) >= 0.6) {
+        return inlineId;
+      }
+    }
+
+    // ── Pass 2: call /info/ for up to 5 artist-matching tracks ───────
+    // Only pay the extra round-trip when inline album data was absent/wrong.
+    const artistCandidates = items
+      .filter(i => normalise(i.artist?.name || i.artistName || '') === tArtist)
+      .slice(0, 5);
+
+    // If no artist match, fall back to top-5 overall
+    const pool = artistCandidates.length ? artistCandidates : items.slice(0, 5);
+
+    let bestId    = null;
+    let bestScore = 0;
+
+    for (const item of pool) {
+      const trackId = item.id || item.tidalId;
+      if (!trackId) continue;
+
+      const info = await apiFetch(`${MONO_BASE}/info/?id=${trackId}`, 7000);
+      const infoAlbumTitle = info?.data?.album?.title || '';
+      const infoAlbumId    = info?.data?.album?.id || info?.data?.albumId;
+      if (!infoAlbumId) continue;
+
+      const score = albumSim(infoAlbumTitle, album);
+      if (score > bestScore) {
+        bestScore = score;
+        bestId    = infoAlbumId;
+      }
+      // Strong match — stop early
+      if (score >= 0.85) break;
+    }
+
+    // Only return if we found a reasonably good match (avoid wrong albums)
+    return bestScore >= 0.5 ? bestId : null;
   } catch (_) { return null; }
 }
 
