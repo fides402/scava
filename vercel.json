@@ -1,16 +1,11 @@
 {
   "version": 2,
-  "routes": [
+  "headers": [
     {
-      "src": "/api/score",
-      "dest": "/api/score.js"
-    },
-    {
-      "src": "/(.*)",
-      "headers": {
-        "Cache-Control": "public, max-age=3600"
-      },
-      "dest": "/$1"
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=3600" }
+      ]
     }
   ]
 }

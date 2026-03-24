@@ -117,15 +117,18 @@ function saveState() {
 
 // ─── DOM ────────────────────────────────────────────────────────────
 const $  = id => document.getElementById(id);
-const $idle    = $('idleState');
-const $loading = $('loadingState');
-const $error   = $('errorState');
-const $card    = $('resultCard');
-const $btn     = $('discoverBtn');
-const $counter = $('seenCounter');
+const $idle        = $('idleState');
+const $loading     = $('loadingState');
+const $error       = $('errorState');
+const $card        = $('resultCard');
+const $btn         = $('discoverBtn');
+const $counter     = $('seenCounter');
+const $searchInput = $('searchInput');
+const $searchBtn   = $('searchBtn');
 
 function show(el) { el.classList.remove('hidden'); }
 function hide(el) { el.classList.add('hidden'); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function setLoading(msg) {
   hide($idle); hide($error); hide($card);
@@ -192,6 +195,16 @@ async function lfmTopAlbums(artist, limit = 10) {
   const result = d?.topalbums?.album || [];
   cacheSet(S.tagCache, key, result);
   return result;
+}
+
+async function lfmArtistSearch(q) {
+  const url = `${LASTFM_BASE}/?method=artist.search&artist=${enc(q)}&api_key=${LASTFM_KEY}&format=json&limit=3`;
+  const d = await apiFetch(url, 6000);
+  const artists = d?.results?.artistmatches?.artist || [];
+  if (!artists.length) return null;
+  const norm = normalise(q);
+  const exact = artists.find(a => normalise(a.name) === norm);
+  return (exact || artists[0])?.name || null;
 }
 
 async function lfmAlbumInfo(artist, album) {
@@ -509,33 +522,50 @@ function fmtListeners(n) {
 }
 
 // ─── MAIN ENGINE ────────────────────────────────────────────────────
-async function recommend() {
+async function recommend(seedOverride = null) {
   if (S.busy) return;
   S.busy = true;
   $btn.disabled = true;
+  if ($searchBtn) $searchBtn.disabled = true;
+
+  const MAX_TRIES = 4;
+  let lastErr = null;
 
   try {
-    // Build taste profile on first run
     if (!S.tasteBuilt) await buildTasteProfile();
 
-    const result = await runEngine();
-    if (!result) {
-      setError('No results found at this rarity level. Try a different level or hit Discover again.');
-    } else {
-      renderCard(result);
+    for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+      try {
+        if (attempt > 1) {
+          setLoading(`Retrying… (${attempt} / ${MAX_TRIES})`);
+          await sleep(900 * (attempt - 1));
+        }
+        const result = await runEngine(seedOverride);
+        if (result) { renderCard(result); return; }
+        // null → no candidates at this rarity level, try fresh seed next round
+      } catch (e) {
+        console.warn(`Attempt ${attempt} failed:`, e.message);
+        lastErr = e;
+        if (attempt < MAX_TRIES) {
+          setLoading(`Network hiccup — retrying (${attempt} / ${MAX_TRIES})…`);
+          await sleep(900 * attempt);
+        }
+      }
     }
-  } catch (e) {
-    console.error(e);
-    setError('Network error. Check your connection and try again.');
+
+    setError(lastErr
+      ? 'Network error after several retries. Check your connection.'
+      : 'No results at this rarity level. Try a different level.');
   } finally {
     S.busy = false;
     $btn.disabled = false;
+    if ($searchBtn) $searchBtn.disabled = false;
     updateCounter();
   }
 }
 
 // ─── ENGINE ─────────────────────────────────────────────────────────
-async function runEngine() {
+async function runEngine(seedOverride = null) {
   const rarity = RARITY[S.rarityLevel];
 
   // ── PHASE 1: EXPAND — collect candidate (artist, album, sim) tuples ──
@@ -563,12 +593,10 @@ async function runEngine() {
   const HOP2_LIMIT  = 6;   // similar artists to expand from hop-1 (hop 2)
   const TARGET      = 60;  // stop collecting at this many candidates
 
-  for (let i = 0; i < MAX_SEEDS && candidates.length < TARGET; i++) {
-    const seed = pickSeedArtist();
+  const expandFromSeed = async (seed) => {
     setLoading(`Exploring from ${seed}…`);
-
     const hop1 = await lfmSimilarArtists(seed, HOP1_LIMIT);
-    if (!hop1.length) continue;
+    if (!hop1.length) return;
 
     // Hop 1: direct similar artists
     for (const artist of hop1) {
@@ -597,6 +625,18 @@ async function runEngine() {
         // Hop-2 similarity is discounted
         await addCandidates(artist2.name, artist2.match * f.match);
       }
+    }
+  };
+
+  if (seedOverride) {
+    // Focused mode: expand from the requested artist, then backfill if still thin
+    await expandFromSeed(seedOverride);
+    for (let i = 0; i < MAX_SEEDS && candidates.length < TARGET; i++) {
+      await expandFromSeed(pickSeedArtist());
+    }
+  } else {
+    for (let i = 0; i < MAX_SEEDS && candidates.length < TARGET; i++) {
+      await expandFromSeed(pickSeedArtist());
     }
   }
 
@@ -874,7 +914,40 @@ document.querySelectorAll('.rarity-btn').forEach(btn => {
 });
 
 // ─── DISCOVER BUTTON ────────────────────────────────────────────────
-$btn.addEventListener('click', recommend);
+$btn.addEventListener('click', () => recommend());
+
+// ─── CUSTOM SEARCH ──────────────────────────────────────────────────
+async function onCustomSearch() {
+  if (S.busy) return;
+  const q = ($searchInput?.value || '').trim();
+  if (!q) return;
+
+  // Temporarily disable buttons and show loading while we resolve the artist
+  $btn.disabled = true;
+  if ($searchBtn) $searchBtn.disabled = true;
+  setLoading(`Finding "${q}"…`);
+
+  try {
+    const artist = await lfmArtistSearch(q);
+    $btn.disabled = false;
+    if ($searchBtn) $searchBtn.disabled = false;
+
+    if (!artist) {
+      setError(`No artist found for "${q}". Try a different search.`);
+      return;
+    }
+    await recommend(artist);
+  } catch (e) {
+    $btn.disabled = false;
+    if ($searchBtn) $searchBtn.disabled = false;
+    setError('Search failed. Check your connection.');
+  }
+}
+
+if ($searchBtn)  $searchBtn.addEventListener('click', onCustomSearch);
+if ($searchInput) $searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') onCustomSearch();
+});
 
 // ─── INIT ────────────────────────────────────────────────────────────
 loadState();
